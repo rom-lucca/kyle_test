@@ -504,8 +504,14 @@
       </div>
 
       <div class="section" style="padding-top:20px" id="alertas-section">
-        <div class="section-title">Alertas</div>
-        <div id="alertas-list"></div>
+        <div onclick="toggleAlertas()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none">
+          <div class="section-title" style="margin-bottom:0">Alertas de Estoque</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span id="alertas-badge" style="font-size:11px;font-weight:700;background:var(--text);color:#fff;border-radius:20px;padding:2px 8px;display:none"></span>
+            <svg id="alertas-chevron" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color:var(--text3);transition:transform .2s;flex-shrink:0"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </div>
+        </div>
+        <div id="alertas-list" style="display:none;margin-top:12px"></div>
       </div>
 
       <div class="section" style="padding-top:20px">
@@ -1459,6 +1465,14 @@ document.querySelectorAll('.modal-overlay').forEach(o=>{
   o.addEventListener('click', e=>{ if(e.target===o) o.classList.remove('open'); });
 });
 
+function toggleAlertas() {
+  const list = document.getElementById('alertas-list');
+  const chevron = document.getElementById('alertas-chevron');
+  const open = list.style.display === 'block';
+  list.style.display = open ? 'none' : 'block';
+  if(chevron) chevron.style.transform = open ? '' : 'rotate(90deg)';
+}
+
 // ════════════════════════════════════════
 // HUB
 // ════════════════════════════════════════
@@ -1480,10 +1494,21 @@ function renderHub() {
   const alertasEl = document.getElementById('alertas-list');
   const zerados = produtos.filter(p=>totalProduto(p)===0);
   const baixos = produtos.filter(p=>{ const t=totalProduto(p); return t>0 && t<=5; });
+  const totalAlertas = zerados.length + baixos.length;
+  const badge = document.getElementById('alertas-badge');
+  if(badge) {
+    if(totalAlertas > 0) {
+      badge.textContent = totalAlertas + ' alerta' + (totalAlertas !== 1 ? 's' : '');
+      badge.style.display = 'inline-block';
+      badge.style.background = zerados.length > 0 ? 'var(--danger)' : 'var(--warn)';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
   let html = '';
   zerados.forEach(p=>{ html+=`<div class="alert danger"><div class="alert-icon">🚫</div><div><strong>${p.nome}</strong> — estoque zerado</div></div>`; });
   baixos.forEach(p=>{ html+=`<div class="alert warn"><div class="alert-icon">⚠️</div><div><strong>${p.nome}</strong> — apenas ${totalProduto(p)} ${totalProduto(p)===1?'peça':'peças'} restantes</div></div>`; });
-  if(!html) html='<div class="alert" style="background:var(--accent2-soft);color:var(--accent2)"><div class="alert-icon">✅</div><div>Estoque em dia, sem alertas!</div></div>';
+  if(!html) html='<div class="alert" style="background:var(--surface2);color:var(--text2)"><div class="alert-icon">✅</div><div>Estoque em dia, sem alertas!</div></div>';
   alertasEl.innerHTML = html;
 
   // Últimas vendas
@@ -1983,6 +2008,7 @@ function updateVendaStatus(id, status) {
   const v = vendas.find(x=>x.id===id);
   if(!v) return;
   v.status = status;
+  if(status === 'Enviado') v.foiEnviado = true; // flag permanente
   fbSaveVenda(v).catch(()=>{});
   closeModal('modal-detalhe-venda');
   if(currentPage==='hub') renderHub();
@@ -1991,13 +2017,37 @@ function updateVendaStatus(id, status) {
 }
 
 function cancelarVenda(id) {
-  if(!confirm('Cancelar esta venda?\nO estoque NÃO será devolvido automaticamente.')) return;
   const v = vendas.find(x=>x.id===id);
-  if(v) { v.status='Cancelado'; fbSaveVenda(v).catch(()=>{}); }
-  closeModal('modal-detalhe-venda');
-  if(currentPage==='hub') renderHub();
-  if(currentPage==='vendas') renderVendas();
-  showToast('❌ Venda cancelada');
+  if(!v) return;
+
+  if(v.foiEnviado) {
+    // Passou por "Enviado" — não devolve estoque automaticamente
+    if(!confirm('Esta venda foi enviada.\n\nAo cancelar, o estoque NÃO será devolvido automaticamente — você precisará ajustar manualmente no Estoque.\n\nContinuar?')) return;
+    v.status = 'Cancelado';
+    fbSaveVenda(v).catch(()=>{});
+    closeModal('modal-detalhe-venda');
+    if(currentPage==='hub') renderHub();
+    if(currentPage==='vendas') renderVendas();
+    showToast('❌ Venda cancelada — ajuste o estoque manualmente');
+  } else {
+    // Nunca foi enviada — devolve ao estoque automaticamente
+    if(!confirm('Cancelar esta venda?\nAs peças serão devolvidas ao estoque automaticamente.')) return;
+    v.status = 'Cancelado';
+    // Devolver estoque
+    (v.itens||[]).forEach(item => {
+      const p = produtos.find(x=>x.id===item.produtoId);
+      if(p && p.estoque && item.tamanho) {
+        p.estoque[item.tamanho] = (p.estoque[item.tamanho]||0) + (item.qtd||1);
+        fbSaveProduto(p).catch(()=>{});
+      }
+    });
+    fbSaveVenda(v).catch(()=>{});
+    closeModal('modal-detalhe-venda');
+    if(currentPage==='hub') renderHub();
+    if(currentPage==='estoque') renderEstoque();
+    if(currentPage==='vendas') renderVendas();
+    showToast('❌ Venda cancelada — estoque devolvido');
+  }
 }
 
 // ════════════════════════════════════════
